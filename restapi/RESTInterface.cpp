@@ -5,6 +5,8 @@
 //  Created by Anders Cedronius on 2019-03-28.
 //  Copyright © 2019 Anders Cedronius. All rights reserved.
 //
+//
+//curl --header "Content-Type: application/json" --request POST --data '{"token":"R32DD1!344sk#","command":"dumpall"}' http://127.0.0.1:8080/restapi/version1
 
 #include "RESTInterface.hpp"
 
@@ -59,6 +61,9 @@ std::string RESTInterface::readJSON(std::string data) {
     
     //Speculative extraction of expected data
     auto token = getContentForKey<std::string>("token", j, jError, jsonOK);
+    if (token != "R32DD1!344sk#") {
+        jsonOK = false;
+    }
     auto command = getContentForKey<std::string>("command", j, jError, jsonOK);
     
     //Did we find data as expected or is the interface method registerd?
@@ -70,7 +75,7 @@ std::string RESTInterface::readJSON(std::string data) {
     }
     //YES
     jResponce["responce"] = "ok";
-    jResponce["info"] = getStatsCallback(command).c_str();
+    jResponce["info"] = getStatsCallback(command);
     return jResponce.dump();
 }
 

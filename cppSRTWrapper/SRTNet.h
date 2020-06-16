@@ -151,6 +151,7 @@ public:
     SRTNet &operator=(SRTNet const &) = delete;  // Copy assign
     SRTNet &operator=(SRTNet &&) = delete;      // Move assign
 
+    SRTSOCKET context = 0;
 
 private:
 
@@ -178,7 +179,6 @@ private:
     //Client thread active? true == yes
     std::atomic<bool> clientThreadActive;
 
-    SRTSOCKET context = 0;
     int poll_id = 0;
     std::mutex netMtx;
     Mode currentMode = Mode::unknown;

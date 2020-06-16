@@ -45,7 +45,7 @@ public:
     bool stopServer();
     
     //Callback method used by example REST interface
-    std::function<std::string(std::string data1)> getStatsCallback;
+    std::function<json(std::string data1)> getStatsCallback;
     
     std::atomic<bool> serverIsRunnning;
 

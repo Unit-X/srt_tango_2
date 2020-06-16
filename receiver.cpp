@@ -10,6 +10,7 @@ RESTInterface myRESTInterface;
 
 void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket);
 
+
 //**********************************
 //Server part
 //**********************************
@@ -43,6 +44,16 @@ uint8_t getEFPId() {
         }
     }
     return UINT8_MAX;
+}
+
+//Global EFP stats
+int32_t efpFrameCounter[UINT8_MAX] = {0};
+int32_t efpBrokenCounter[UINT8_MAX] = {0};
+int64_t byteCounter[UINT8_MAX] = {0};
+void clearStats(uint8_t efpId) {
+    efpFrameCounter[efpId] = 0;
+    efpBrokenCounter[efpId] = 0;
+    byteCounter[efpId] = 0;
 }
 
 // Return a connection object. (Return nullptr if you don't want to connect to that client)
@@ -90,6 +101,10 @@ std::shared_ptr<NetworkConnection> validateConnection(struct sockaddr &sin) {
             &efpActiveList[efpId]; // And a pointer to the list so that we invalidate the id when SRT drops the connection
     v->myEFPReceiver->receiveCallback =
             std::bind(&gotData, std::placeholders::_1); //In this example we aggregate all callbacks..
+
+            // Clear the stats for this efpID
+    clearStats(efpId);
+
     return a1; // Now hand over the ownership to SRTNet
 }
 
@@ -108,24 +123,74 @@ bool handleData(std::unique_ptr<std::vector<uint8_t>> &content,
 //ElasticFrameProtocol got som data from some efpSource.. Everything you need to know is in the rPacket
 //meaning EFP stream number EFP id and content type. if it's broken the PTS value
 //code with additional information of payload variant and if there is embedded data to extract and so on.
+
+
 void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket) {
-    std::cout << "BAM... Got some NAL-units of size " << unsigned(rPacket->mFrameSize) <<
-              " pts " << unsigned(rPacket->mPts) <<
-              " is broken? " << rPacket->mBroken <<
-              " from EFP connection " << unsigned(rPacket->mSource) <<
-              std::endl;
+
+    efpFrameCounter[rPacket->mSource]++;
+    byteCounter[rPacket->mSource] += rPacket->mFrameSize;
+    if (rPacket->mBroken) {
+        efpBrokenCounter[rPacket->mSource]++;
+    }
 }
 
-std::string getStats(std::string str1) {
-    std::cout << "Return stats" << std::endl;
-    return "Stats";
+json getStats(std::string cmdString) {
+    json j;
+    if (cmdString == "dumpall") {
+
+        mySRTNetServer.getActiveClients([&](std::map<SRTSOCKET, std::shared_ptr<NetworkConnection>> &clientList)
+                                        {
+                                            for (const auto& client: clientList) {
+                                                std::string handle = std::to_string(client.first);
+                                                SRT_TRACEBSTATS currentServerStats = {0};
+                                                if (mySRTNetServer.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::no, client.first)) {
+                                                    //Send all stats
+                                                    j[handle.c_str()]["pktSent"] = currentServerStats.pktSent;
+                                                    j[handle.c_str()]["pktRecv"] = currentServerStats.pktRecv;
+                                                    j[handle.c_str()]["pktSndLoss"] = currentServerStats.pktSndLoss;
+                                                    j[handle.c_str()]["pktRcvLoss"] = currentServerStats.pktRcvLoss;
+                                                    j[handle.c_str()]["pktRetrans"] = currentServerStats.pktRetrans;
+                                                    j[handle.c_str()]["pktRcvRetrans"] = currentServerStats.pktRcvRetrans;
+                                                    j[handle.c_str()]["pktSentACK"] = currentServerStats.pktSentACK;
+                                                    j[handle.c_str()]["pktRecvACK"] = currentServerStats.pktRecvACK;
+                                                    j[handle.c_str()]["pktSentNAK"] = currentServerStats.pktSentNAK;
+                                                    j[handle.c_str()]["pktRecvNAK"] = currentServerStats.pktRecvNAK;
+                                                    j[handle.c_str()]["mbpsSendRate"] = currentServerStats.mbpsSendRate;
+                                                    j[handle.c_str()]["mbpsRecvRate"] = currentServerStats.mbpsRecvRate;
+                                                    j[handle.c_str()]["pktSndDrop"] = currentServerStats.pktSndDrop;
+                                                    j[handle.c_str()]["pktRcvDrop"] = currentServerStats.pktRcvDrop;
+                                                }
+                                                auto v = std::any_cast<std::shared_ptr<MyClass> &>(client.second->object); //Get my object I gave SRTNet
+                                                j[handle.c_str()]["efp_broken_cnt"] = efpBrokenCounter[v->efpId];
+                                                j[handle.c_str()]["efp_frame_cnt"] = efpFrameCounter[v->efpId];
+                                                j[handle.c_str()]["efp_byte_cnt"] = byteCounter[v->efpId];
+                                            }
+                                        }
+        );
+        return j;
+    } else {
+        return j;
+    }
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+
+    if (argc != 4) {
+        std::cout << "Expected 3 arguments: Listen_IP Listen_Port JSON_Port" << std::endl;
+    }
+
+    std::string listenIP = argv[1];
+    int listenPort = std::stoi(argv[2]);
+    int listenJsonPort = std::stoi(argv[3]);
+
+    if (listenPort == listenJsonPort) {
+        std::cout << "Listen_Port and JSON_Port can't be same port" << std::endl;
+        return EXIT_FAILURE;
+    }
 
     myRESTInterface.getStatsCallback=std::bind(&getStats, std::placeholders::_1);
-    if (myRESTInterface.startServer("0.0.0.0", 8080, "/restapi/version1")) {
-        std::cout << "REST interface did start." << std::endl;
+    if (!myRESTInterface.startServer(listenIP.c_str(), listenJsonPort, "/restapi/version1")) {
+        std::cout << "REST interface did not start." << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -136,7 +201,7 @@ int main() {
                                             std::placeholders::_2,
                                             std::placeholders::_3,
                                             std::placeholders::_4);
-    if (!mySRTNetServer.startServer("0.0.0.0", 8000, 16, 1000, 100, MTU, "Th1$_is_4_0pt10N4L_P$k")) {
+    if (!mySRTNetServer.startServer(listenIP, listenPort, 16, 1000, 100, MTU, "Th1$_is_4_0pt10N4L_P$k")) {
         std::cout << "SRT Server failed to start." << std::endl;
         return EXIT_FAILURE;
     }
