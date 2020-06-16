@@ -1,59 +1,48 @@
 #include <iostream>
+#include "kissnet/kissnet.hpp"
+#include "mpegts_demuxer.h"
+#include "simple_buffer.h"
+#include "ts_packet.h"
 #include "ElasticFrameProtocol.h"
 #include "SRTNet.h"
 
 #define MTU 1456 //SRT-max
-#define WORKER_VIDEO_FRAMES 3000
+#define LISTEN_INTERFACE "127.0.0.1"
+#define LISTEN_PORT 8080
+
+#define TYPE_AUDIO 0x0f
+#define TYPE_VIDEO 0x1b
 
 SRTNet mySRTNetClient; //The SRT client
 ElasticFrameProtocolSender myEFPSender(MTU); //EFP sender
 
-//This will act as our encoder and just provide us with a H264 AnnexB frame when we want one.
-std::vector<uint8_t> getNALUnit(int i) {
-    std::string fileName = "../media/" + std::to_string(i) + ".h264";
-    FILE *f = fopen(fileName.c_str(), "rb");
-    if (!f) {
-        std::cout << "Failed opening file" << std::endl;
-        std::vector<uint8_t> empty;
-        return empty;
+//Here is where you need to add logic for how you want to map TS to EFP
+//In this simple example we map one h264 video and the first AAC audio we find.
+uint16_t videoPID = 0;
+uint16_t audioPID = 0;
+uint8_t efpStreamIDVideo = 0;
+uint8_t efpStreamIDAudio = 0;
+
+bool mapTStoEFP(PMTHeader &rPMTdata) {
+    bool foundVideo = false;
+    bool foundAudio = false;
+    for (auto &rStream: rPMTdata.mInfos) {
+        if (rStream->mStreamType == TYPE_VIDEO && !foundVideo) {
+            foundVideo = true;
+            videoPID = rStream->mElementaryPid;
+            efpStreamIDVideo = 10;
+        }
+        if (rStream->mStreamType == TYPE_AUDIO && !foundAudio) {
+            foundAudio = true;
+            audioPID = rStream->mElementaryPid;
+            efpStreamIDAudio = 20;
+        }
     }
-    fseek(f, 0, SEEK_END);
-    size_t fSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    uint8_t *pictureBuffer = (uint8_t *)malloc(fSize);
-    if (!pictureBuffer) {
-        std::cout << "Failed reserving memory" << std::endl;
-        std::vector<uint8_t> empty;
-        return empty;
-    }
-    size_t fResult = fread(pictureBuffer, 1, fSize, f);
-    if (fResult != fSize) {
-        std::cout << "Failed reading data" << std::endl;
-        std::vector<uint8_t> empty;
-        return empty;
-    }
-    std::vector<uint8_t> my_vector(&pictureBuffer[0], &pictureBuffer[fSize]);
-    free(pictureBuffer);
-    fclose(f);
-    return my_vector;
+    if (!foundVideo || !foundAudio) return false;
+    return true;
 }
 
-//Just for debug
-int packSize;
-
 void sendData(const std::vector<uint8_t> &subPacket) {
-
-    //for debugging actual bytes sent (payload bytes)
-    if (subPacket[0] == 1 || subPacket[0] == 3) {
-        packSize += subPacket.size() - myEFPSender.geType1Size();
-    }
-
-    //for debugging actual bytes sent (payload bytes)
-    if (subPacket[0] == 2) {
-        packSize += subPacket.size() - myEFPSender.geType2Size();
-        std::cout << "Sent-> " << packSize << std::endl;
-        packSize = 0;
-    }
 
     SRT_MSGCTRL thisMSGCTRL1 = srt_msgctrl_default;
     bool result = mySRTNetClient.sendData((uint8_t *) subPacket.data(), subPacket.size(), &thisMSGCTRL1);
@@ -71,9 +60,8 @@ void handleDataClient(std::unique_ptr<std::vector<uint8_t>> &content,
 }
 
 int main() {
-    packSize = 0;
+    std::cout << "Client listens for MPEG-TS at: " << LISTEN_INTERFACE << ":" << unsigned(LISTEN_PORT) << std::endl;
 
-    //Set-up framing protocol
     myEFPSender.sendCallback = std::bind(&sendData, std::placeholders::_1);
 
     //Set-up SRT
@@ -83,32 +71,76 @@ int main() {
                                             std::placeholders::_2,
                                             std::placeholders::_3,
                                             std::placeholders::_4);
-    if (!mySRTNetClient.startClient("127.0.0.1", 8000, 16, 1000, 100, client1Connection, MTU)) {
+    if (!mySRTNetClient.startClient("127.0.0.1", 8000, 16, 1000, 100, client1Connection, MTU, "Th1$_is_4_0pt10N4L_P$k")) {
         std::cout << "SRT client1 failed starting." << std::endl;
         return EXIT_FAILURE;
     }
 
-    //Generate some data to send
-    uint64_t pts = 0;
-    uint64_t dts = 0;
-    for (int i = 0; i < WORKER_VIDEO_FRAMES; ++i) {
-        std::vector<uint8_t> thisNalData = getNALUnit(i + 1);
-        std::cout << "SendNAL > " << thisNalData.size() << " pts " << pts << std::endl;
-        //We got no DTS in this example set to PTS if no DTS is available (In this version of EFP DTS MUST be set to PTS if not available)
-        dts = pts;
-        myEFPSender.packAndSend(thisNalData,
-                                ElasticFrameContent::h264,
-                                pts,
-                                dts,
-                                EFP_CODE('A', 'N', 'X', 'B'),
-                                1,
-                                NO_FLAGS);
-        //you could also send other data from other threads for example audio when the audio encoder spits out something.
-        //myEFPSender.packAndSend(thisADTSData,ElasticFrameContent::adts,pts,'ADTS',1,NO_FLAGS);
-        pts += 90000 / 60; //fake a pts of 60Hz. FYI.. the codestream is 23.98 (I and P only)
-        std::this_thread::sleep_for(std::chrono::milliseconds(16)); //sleep for 16ms ~60Hz
+
+    ElasticFrameMessages efpMessage;
+
+    SimpleBuffer in;
+    MpegTsDemuxer demuxer;
+    kissnet::udp_socket serverSocket(kissnet::endpoint(LISTEN_INTERFACE, LISTEN_PORT));
+    serverSocket.bind();
+    kissnet::buffer<4096> receiveBuffer;
+    bool firstRun = true;
+    while (true) {
+        auto[received_bytes, status] = serverSocket.recv(receiveBuffer);
+        if (!received_bytes || status != kissnet::socket_status::valid) {
+            break;
+        }
+        in.append((const char *) receiveBuffer.data(), received_bytes);
+        TsFrame *frame = nullptr;
+        demuxer.decode(&in, frame);
+        if (frame) {
+
+            if (firstRun && demuxer.mPmtIsValid) {
+                if (!mapTStoEFP(demuxer.mPmtHeader)) {
+                    std::cout << "Unable to find a video and a audio in this TS stream" << std::endl;
+                    return EXIT_FAILURE;
+                }
+            }
+
+
+            std::cout << "GOT: " << unsigned(frame->mStreamType);
+            if (frame->mStreamType == 0x0f && frame->mPid == audioPID) {
+
+                //  for (auto lIt = demuxer.mStreamPidMap.begin(); lIt != demuxer.mStreamPidMap.end(); lIt++) {
+                //      std::cout << "Hej: " << (int)lIt->first << " " << (int)lIt->second << std::endl;
+                //  }
+
+                std::cout << " AAC Frame";
+                efpMessage = myEFPSender.packAndSendFromPtr((const uint8_t *) frame->mData->data(),
+                                                          frame->mData->size(),
+                                                          ElasticFrameContent::adts,
+                                                          frame->mPts,
+                                                          frame->mPts,
+                                                          EFP_CODE('A', 'D', 'T', 'S'),
+                                                          efpStreamIDAudio,
+                                                          NO_FLAGS
+                );
+
+                if (efpMessage != ElasticFrameMessages::noError) {
+                    std::cout << "h264 packAndSendFromPtr error " << std::endl;
+                }
+            } else if (frame->mStreamType == 0x1b && frame->mPid == videoPID) {
+                std::cout << " H.264 frame";
+                efpMessage = myEFPSender.packAndSendFromPtr((const uint8_t *) frame->mData->data(),
+                                                          frame->mData->size(),
+                                                          ElasticFrameContent::h264,
+                                                          frame->mPts,
+                                                          frame->mDts,
+                                                          EFP_CODE('A', 'N', 'X', 'B'),
+                                                          efpStreamIDVideo,
+                                                          NO_FLAGS
+                );
+                if (efpMessage != ElasticFrameMessages::noError) {
+                    std::cout << "h264 packAndSendFromPtr error " << std::endl;
+                }
+            }
+            std::cout << std::endl;
+        }
     }
-    mySRTNetClient.stop();
-    std::cout << "Done sending will exit" << std::endl;
-    return 0;
+    return EXIT_SUCCESS;
 }
