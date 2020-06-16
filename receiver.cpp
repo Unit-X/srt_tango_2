@@ -1,28 +1,50 @@
 #include <iostream>
-#include <thread>
-#include <utility>
-
+#include "ElasticFrameProtocol.h"
 #include "SRTNet.h"
 
-SRTNet mySRTNetServer;
+#define MTU 1456 //SRT-max
 
-//This is my class managed by the network connection.
-class MyClass {
-public:
-    MyClass() {
-        isKnown = false;
-    };
-    int test = 0;
-    int counter = 0;
-    std::atomic_bool isKnown;
-};
+SRTNet mySRTNetServer; //SRT
+
+void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket);
 
 //**********************************
 //Server part
 //**********************************
 
-//Return a connection object. (Return nullptr if you don't want to connect to that client)
-std::shared_ptr<NetworkConnection> validateConnection(struct sockaddr &sin, SRTSOCKET newSocket) {
+// This is the class and everything you want to associate with a SRT connection
+// You can see this as a classic c-'void* context' on steroids since SRTNet will own it and handle
+// it's lifecycle. The destructor is called when the SRT connection is terminated. Magic!
+
+class MyClass {
+public:
+    MyClass() {
+        myEFPReceiver = new (std::nothrow) ElasticFrameProtocolReceiver(5, 2);
+    }
+    virtual ~MyClass() {
+        *efpActiveElement = false; //Release active marker
+        delete myEFPReceiver;
+    };
+    uint8_t efpId = 0;
+    std::atomic_bool *efpActiveElement;
+    ElasticFrameProtocolReceiver *myEFPReceiver;
+};
+
+// Array of 256 possible EFP receivers, could be millions but I just decided 256 change to your needs.
+// You could make it much simpler just giving a new connection a uint64_t number++
+std::atomic_bool efpActiveList[UINT8_MAX] = {false};
+uint8_t getEFPId() {
+    for (int i = 1; i < UINT8_MAX - 1; i++) {
+        if (!efpActiveList[i]) {
+            efpActiveList[i] = true; //Set active
+            return i;
+        }
+    }
+    return UINT8_MAX;
+}
+
+// Return a connection object. (Return nullptr if you don't want to connect to that client)
+std::shared_ptr<NetworkConnection> validateConnection(struct sockaddr &sin) {
 
     char addrIPv6[INET6_ADDRSTRLEN];
 
@@ -49,60 +71,59 @@ std::shared_ptr<NetworkConnection> validateConnection(struct sockaddr &sin, SRTS
         return nullptr;
     }
 
-    auto a1 = std::make_shared<NetworkConnection>();
-    a1->object = std::make_shared<MyClass>();
-    return a1;
+    //Get EFP ID.
+    uint8_t efpId = getEFPId();
+    if (efpId == UINT8_MAX) {
+        std::cout << "Unable to accept more EFP connections " << std::endl;
+        return nullptr;
+    }
 
+    // Here we can put whatever into the connection. The object we embed is maintained by SRTNet
+    // In this case we put MyClass in containing the EFP ID we got from getEFPId() and a EFP-receiver
+    auto a1 = std::make_shared<NetworkConnection>(); // Create a connection
+    a1->object = std::make_shared<MyClass>(); // And my object containing my stuff
+    auto v = std::any_cast<std::shared_ptr<MyClass> &>(a1->object); //Then get a pointer to my stuff
+    v->efpId = efpId; // Populate it with the efpId
+    v->efpActiveElement =
+            &efpActiveList[efpId]; // And a pointer to the list so that we invalidate the id when SRT drops the connection
+    v->myEFPReceiver->receiveCallback =
+            std::bind(&gotData, std::placeholders::_1); //In this example we aggregate all callbacks..
+    return a1; // Now hand over the ownership to SRTNet
 }
 
-//Data callback.
-bool handleData(std::unique_ptr <std::vector<uint8_t>> &content, SRT_MSGCTRL &msgCtrl, std::shared_ptr<NetworkConnection> ctx, SRTSOCKET clientHandle) {
-
-    //Try catch?
-    auto v = std::any_cast<std::shared_ptr<MyClass>&>(ctx -> object);
-
-    if (!v->isKnown) { //just a example/test. This connection is unknown. See what connection it is and set the test-parameter accordingly
-        if (content->data()[0] == 1) {
-            v->isKnown=true;
-            v->test = 1;
-        }
-
-        if (content->data()[0] == 2) {
-            v->isKnown=true;
-            v->test = 2;
-        }
-    }
-
-    if (v->isKnown) {
-        if (v->counter++ == 100) { //every 100 packet you got respond back to the client using the same data.
-            v->counter = 0;
-            SRT_MSGCTRL thisMSGCTRL = srt_msgctrl_default;
-            mySRTNetServer.sendData(content->data(), content->size(), &thisMSGCTRL,clientHandle);
-        }
-    }
-
-    // std::cout << "Got ->" << content->size() << " " << std::endl;
-
+//Network data recieved callback.
+bool handleData(std::unique_ptr<std::vector<uint8_t>> &content,
+                SRT_MSGCTRL &msgCtrl,
+                std::shared_ptr<NetworkConnection> ctx,
+                SRTSOCKET clientHandle) {
+    //We got data from SRTNet
+    auto v = std::any_cast<std::shared_ptr<MyClass> &>(ctx->object); //Get my object I gave SRTNet
+    v->myEFPReceiver->receiveFragment(*content,
+                                      v->efpId); //unpack the fragment I got using the efpId created at connection time.
     return true;
-};
+}
 
+//ElasticFrameProtocol got som data from some efpSource.. Everything you need to know is in the rPacket
+//meaning EFP stream number EFP id and content type. if it's broken the PTS value
+//code with additional information of payload variant and if there is embedded data to extract and so on.
+void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket) {
+    std::cout << "BAM... Got some NAL-units of size " << unsigned(rPacket->mFrameSize) <<
+              " pts " << unsigned(rPacket->mPts) <<
+              " is broken? " << rPacket->mBroken <<
+              " from EFP connection " << unsigned(rPacket->mSource) <<
+              std::endl;
+}
 
-int main(int argc, const char * argv[]) {
+int main() {
 
-    std::cout << "Server started" << std::endl;
-
-    //Register the server callbacks
-    mySRTNetServer.clientConnected=std::bind(&validateConnection, std::placeholders::_1, std::placeholders::_2);
-    mySRTNetServer.receivedData=std::bind(&handleData, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4);
-    /*Start the server
-     * ip: bind to this ip (can be IPv4 or IPv6)
-     * port: bind to this port
-     * reorder: Number of packets in the reorder window
-     * latency: the max latency in milliseconds before dropping the data
-     * overhead: The % overhead tolerated for retransmits relative the original data stream.
-     * mtu: max 1456
-     */
-    if (!mySRTNetServer.startServer("0.0.0.0", 8000, 16, 1000, 100, 1456,"Th1$_is_4_0pt10N4L_P$k")) {
+    //Setup and start the SRT server
+    mySRTNetServer.clientConnected = std::bind(&validateConnection, std::placeholders::_1);
+    mySRTNetServer.receivedData = std::bind(&handleData,
+                                            std::placeholders::_1,
+                                            std::placeholders::_2,
+                                            std::placeholders::_3,
+                                            std::placeholders::_4);
+    if (!mySRTNetServer.startServer("0.0.0.0", 8000, 16, 1000, 100, MTU, "Th1$_is_4_0pt10N4L_P$k")) {
         std::cout << "SRT Server failed to start." << std::endl;
         return EXIT_FAILURE;
     }
@@ -115,4 +136,11 @@ int main(int argc, const char * argv[]) {
                                         }
         );
     }
+
+    //When you decide to quit garbage collect and stop threads....
+    mySRTNetServer.stop();
+
+    std::cout << "Done serving. Will exit." << std::endl;
+    return 0;
 }
+

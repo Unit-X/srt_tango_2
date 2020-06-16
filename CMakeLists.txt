@@ -11,6 +11,7 @@ find_package(OpenSSL REQUIRED)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/srt/)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/srt/common)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/cppSRTWrapper/)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/efp/)
 
 add_library(srtnet STATIC ${CMAKE_CURRENT_SOURCE_DIR}/cppSRTWrapper/SRTNet.cpp)
 target_link_libraries(srtnet ${CMAKE_CURRENT_SOURCE_DIR}/srt/libsrt.a ${OPENSSL_LIBRARIES} Threads::Threads)
@@ -19,5 +20,5 @@ target_link_libraries(srtnet ${CMAKE_CURRENT_SOURCE_DIR}/srt/libsrt.a ${OPENSSL_
 add_executable(srt_sender sender.cpp)
 target_link_libraries(srt_sender srtnet)
 
-add_executable(srt_receiver receiver.cpp)
+add_executable(srt_receiver receiver.cpp ${CMAKE_CURRENT_SOURCE_DIR}/efp/ElasticFrameProtocol.cpp)
 target_link_libraries(srt_receiver srtnet)
