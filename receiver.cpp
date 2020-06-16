@@ -1,10 +1,12 @@
 #include <iostream>
 #include "ElasticFrameProtocol.h"
 #include "SRTNet.h"
+#include "RESTInterface.hpp"
 
 #define MTU 1456 //SRT-max
 
 SRTNet mySRTNetServer; //SRT
+RESTInterface myRESTInterface;
 
 void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket);
 
@@ -114,7 +116,18 @@ void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket) {
               std::endl;
 }
 
+std::string getStats(std::string str1) {
+    std::cout << "Return stats" << std::endl;
+    return "Stats";
+}
+
 int main() {
+
+    myRESTInterface.getStatsCallback=std::bind(&getStats, std::placeholders::_1);
+    if (myRESTInterface.startServer("0.0.0.0", 8080, "/restapi/version1")) {
+        std::cout << "REST interface did start." << std::endl;
+        return EXIT_FAILURE;
+    }
 
     //Setup and start the SRT server
     mySRTNetServer.clientConnected = std::bind(&validateConnection, std::placeholders::_1);
