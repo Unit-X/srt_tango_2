@@ -29,6 +29,7 @@ public:
         delete myEFPReceiver;
     };
     uint8_t efpId = 0;
+    int64_t timestampCreated = 0;
     std::atomic_bool *efpActiveElement;
     ElasticFrameProtocolReceiver *myEFPReceiver;
 };
@@ -105,6 +106,9 @@ std::shared_ptr<NetworkConnection> validateConnection(struct sockaddr &sin) {
             // Clear the stats for this efpID
     clearStats(efpId);
 
+    v->timestampCreated = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+
     return a1; // Now hand over the ownership to SRTNet
 }
 
@@ -142,6 +146,7 @@ json getStats(std::string cmdString) {
                                         {
                                             for (const auto& client: clientList) {
                                                 std::string handle = std::to_string(client.first);
+                                                auto v = std::any_cast<std::shared_ptr<MyClass> &>(client.second->object); //Get my object I gave SRTNet
                                                 SRT_TRACEBSTATS currentServerStats = {0};
                                                 if (mySRTNetServer.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::no, client.first)) {
                                                     //Send all stats
@@ -176,7 +181,8 @@ json getStats(std::string cmdString) {
                                                     j[handle.c_str()]["msRcvTsbPdDelay"] = currentServerStats.msRcvTsbPdDelay;
                                                     j[handle.c_str()]["pktReorderTolerance"] = currentServerStats.pktReorderTolerance;
                                                 }
-                                                auto v = std::any_cast<std::shared_ptr<MyClass> &>(client.second->object); //Get my object I gave SRTNet
+                                                j[handle.c_str()]["duration_seconds_cnt"] = std::chrono::duration_cast<std::chrono::seconds>(
+                                                        std::chrono::steady_clock::now().time_since_epoch()).count() - v->timestampCreated;
                                                 j[handle.c_str()]["efp_broken_cnt"] = efpBrokenCounter[v->efpId];
                                                 j[handle.c_str()]["efp_frame_cnt"] = efpFrameCounter[v->efpId];
                                                 j[handle.c_str()]["efp_byte_cnt"] = byteCounter[v->efpId];

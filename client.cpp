@@ -18,6 +18,8 @@ SRTNet mySRTNetClient; //The SRT client
 ElasticFrameProtocolSender myEFPSender(PAYLOAD_SIZE); //EFP sender
 RESTInterface myRESTInterface;
 
+int64_t timestampCreated = {0};
+
 //Here is where you need to add logic for how you want to map TS to EFP
 //In this simple example we map one h264 video and the first AAC audio we find.
 uint16_t videoPID = 0;
@@ -102,6 +104,8 @@ json getStats(std::string cmdString) {
             j[handle.c_str()]["pktReorderTolerance"] = currentServerStats.pktReorderTolerance;
 
         }
+        j[handle.c_str()]["duration_seconds_cnt"] = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count() - timestampCreated;
         return j;
     } else {
         return j;
@@ -144,6 +148,8 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    timestampCreated = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
 
     ElasticFrameMessages efpMessage;
 
@@ -171,14 +177,14 @@ int main(int argc, char *argv[]) {
             }
 
 
-            std::cout << "GOT: " << unsigned(frame->mStreamType);
+            //std::cout << "GOT: " << unsigned(frame->mStreamType);
             if (frame->mStreamType == 0x0f && frame->mPid == audioPID) {
 
                 //  for (auto lIt = demuxer.mStreamPidMap.begin(); lIt != demuxer.mStreamPidMap.end(); lIt++) {
-                //      std::cout << "Hej: " << (int)lIt->first << " " << (int)lIt->second << std::endl;
+                //      std::cout << "nfo: " << (int)lIt->first << " " << (int)lIt->second << std::endl;
                 //  }
 
-                std::cout << " AAC Frame";
+                //std::cout << " AAC Frame";
                 efpMessage = myEFPSender.packAndSendFromPtr((const uint8_t *) frame->mData->data(),
                                                             frame->mData->size(),
                                                             ElasticFrameContent::adts,
@@ -190,10 +196,10 @@ int main(int argc, char *argv[]) {
                 );
 
                 if (efpMessage != ElasticFrameMessages::noError) {
-                    std::cout << "h264 packAndSendFromPtr error " << std::endl;
+                    std::cout << "h264 packAndSendFromPtr error " << (uint8_t)efpMessage << std::endl;
                 }
             } else if (frame->mStreamType == 0x1b && frame->mPid == videoPID) {
-                std::cout << " H.264 frame";
+                //std::cout << " H.264 frame";
                 efpMessage = myEFPSender.packAndSendFromPtr((const uint8_t *) frame->mData->data(),
                                                             frame->mData->size(),
                                                             ElasticFrameContent::h264,
@@ -204,10 +210,10 @@ int main(int argc, char *argv[]) {
                                                             NO_FLAGS
                 );
                 if (efpMessage != ElasticFrameMessages::noError) {
-                    std::cout << "h264 packAndSendFromPtr error " << std::endl;
+                    std::cout << "h264 packAndSendFromPtr error " << (uint8_t)efpMessage <<std::endl;
                 }
             }
-            std::cout << std::endl;
+            //std::cout << std::endl;
         }
     }
     return EXIT_SUCCESS;
