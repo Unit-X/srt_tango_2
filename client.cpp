@@ -7,7 +7,7 @@
 #include "SRTNet.h"
 #include "RESTInterface.hpp"
 
-#define MTU 1456 //SRT-max
+#define PAYLOAD_SIZE 1456 //SRT-max
 #define LISTEN_INTERFACE "127.0.0.1"
 #define LISTEN_PORT 8080
 
@@ -15,7 +15,7 @@
 #define TYPE_VIDEO 0x1b
 
 SRTNet mySRTNetClient; //The SRT client
-ElasticFrameProtocolSender myEFPSender(MTU); //EFP sender
+ElasticFrameProtocolSender myEFPSender(PAYLOAD_SIZE); //EFP sender
 RESTInterface myRESTInterface;
 
 //Here is where you need to add logic for how you want to map TS to EFP
@@ -68,21 +68,39 @@ json getStats(std::string cmdString) {
         std::string handle = std::to_string(mySRTNetClient.context);
         SRT_TRACEBSTATS currentServerStats = {0};
         if (mySRTNetClient.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::no)) {
+
             //Send all stats
+            j[handle.c_str()]["msTimeStamp"] = currentServerStats.msTimeStamp;
+            j[handle.c_str()]["pktFlowWindow"] = currentServerStats.pktFlowWindow;
+            j[handle.c_str()]["pktCongestionWindow"] = currentServerStats.pktCongestionWindow;
+            j[handle.c_str()]["pktFlightSize"] = currentServerStats.pktFlightSize;
+            j[handle.c_str()]["msRTT"] = currentServerStats.msRTT;
+            j[handle.c_str()]["mbpsBandwidth"] = currentServerStats.mbpsBandwidth;
+            j[handle.c_str()]["mbpsMaxBW"] = currentServerStats.mbpsMaxBW;
             j[handle.c_str()]["pktSent"] = currentServerStats.pktSent;
-            j[handle.c_str()]["pktRecv"] = currentServerStats.pktRecv;
             j[handle.c_str()]["pktSndLoss"] = currentServerStats.pktSndLoss;
-            j[handle.c_str()]["pktRcvLoss"] = currentServerStats.pktRcvLoss;
-            j[handle.c_str()]["pktRetrans"] = currentServerStats.pktRetrans;
-            j[handle.c_str()]["pktRcvRetrans"] = currentServerStats.pktRcvRetrans;
-            j[handle.c_str()]["pktSentACK"] = currentServerStats.pktSentACK;
-            j[handle.c_str()]["pktRecvACK"] = currentServerStats.pktRecvACK;
-            j[handle.c_str()]["pktSentNAK"] = currentServerStats.pktSentNAK;
-            j[handle.c_str()]["pktRecvNAK"] = currentServerStats.pktRecvNAK;
-            j[handle.c_str()]["mbpsSendRate"] = currentServerStats.mbpsSendRate;
-            j[handle.c_str()]["mbpsRecvRate"] = currentServerStats.mbpsRecvRate;
             j[handle.c_str()]["pktSndDrop"] = currentServerStats.pktSndDrop;
+            j[handle.c_str()]["pktRetrans"] = currentServerStats.pktRetrans;
+            j[handle.c_str()]["byteSent"] = currentServerStats.byteSent;
+            j[handle.c_str()]["byteAvailSndBuf"] = currentServerStats.byteAvailSndBuf;
+            j[handle.c_str()]["byteSndDrop"] = currentServerStats.byteSndDrop;
+            j[handle.c_str()]["mbpsSendRate"] = currentServerStats.mbpsSendRate;
+            j[handle.c_str()]["usPktSndPeriod"] = currentServerStats.usPktSndPeriod;
+            j[handle.c_str()]["msSndBuf"] = currentServerStats.msSndBuf;
+            j[handle.c_str()]["pktRecv"] = currentServerStats.pktRecv;
+            j[handle.c_str()]["pktRcvLoss"] = currentServerStats.pktRcvLoss;
             j[handle.c_str()]["pktRcvDrop"] = currentServerStats.pktRcvDrop;
+            j[handle.c_str()]["pktRcvRetrans"] = currentServerStats.pktRcvRetrans;
+            j[handle.c_str()]["pktRcvBelated"] = currentServerStats.pktRcvBelated;
+            j[handle.c_str()]["byteRecv"] = currentServerStats.byteRecv;
+            j[handle.c_str()]["byteAvailRcvBuf"] = currentServerStats.byteAvailRcvBuf;
+            j[handle.c_str()]["byteRcvLoss"] = currentServerStats.byteRcvLoss;
+            j[handle.c_str()]["byteRcvDrop"] = currentServerStats.byteRcvDrop;
+            j[handle.c_str()]["mbpsRecvRate"] = currentServerStats.mbpsRecvRate;
+            j[handle.c_str()]["msRcvBuf"] = currentServerStats.msRcvBuf;
+            j[handle.c_str()]["msRcvTsbPdDelay"] = currentServerStats.msRcvTsbPdDelay;
+            j[handle.c_str()]["pktReorderTolerance"] = currentServerStats.pktReorderTolerance;
+
         }
         return j;
     } else {
@@ -120,7 +138,7 @@ int main(int argc, char *argv[]) {
                                             std::placeholders::_2,
                                             std::placeholders::_3,
                                             std::placeholders::_4);
-    if (!mySRTNetClient.startClient(targetIP, targetPort, 16, 1000, 100, client1Connection, MTU,
+    if (!mySRTNetClient.startClient(targetIP, targetPort, 4, 1000, 100, client1Connection, PAYLOAD_SIZE,
                                     "Th1$_is_4_0pt10N4L_P$k")) {
         std::cout << "SRT client1 failed starting." << std::endl;
         return EXIT_FAILURE;

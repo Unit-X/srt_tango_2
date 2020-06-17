@@ -41,7 +41,7 @@ bool SRTNet::isIPv6(const std::string &str) {
     return inet_pton(AF_INET6, str.c_str(), &(sa.sin6_addr)) != 0;
 }
 
-bool SRTNet::startServer(std::string ip, uint16_t port, int reorder, int32_t latency, int overhead, int mtu,
+bool SRTNet::startServer(std::string ip, uint16_t port, int reorder, int payloadSize,
                          std::string psk) {
 
     struct sockaddr_in saV4 = {0};
@@ -102,11 +102,12 @@ bool SRTNet::startServer(std::string ip, uint16_t port, int reorder, int32_t lat
         return false;
     }
 
-    result = srt_setsockflag(context, SRTO_LATENCY, &latency, sizeof latency);
-    if (result == SRT_ERROR) {
-        SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_LATENCY: " << srt_getlasterror_str());
-        return false;
-    }
+    //do not set
+//    result = srt_setsockflag(context, SRTO_LATENCY, &latency, sizeof latency);
+//    if (result == SRT_ERROR) {
+//        SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_LATENCY: " << srt_getlasterror_str());
+//        return false;
+//    }
 
     result = srt_setsockflag(context, SRTO_LOSSMAXTTL, &reorder, sizeof reorder);
     if (result == SRT_ERROR) {
@@ -120,13 +121,14 @@ bool SRTNet::startServer(std::string ip, uint16_t port, int reorder, int32_t lat
         return false;
     }
 
-    result = srt_setsockflag(context, SRTO_OHEADBW, &overhead, sizeof overhead);
-    if (result == SRT_ERROR) {
-        SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_OHEADBW: " << srt_getlasterror_str());
-        return false;
-    }
+    //do not set
+//    result = srt_setsockflag(context, SRTO_OHEADBW, &overhead, sizeof overhead);
+//    if (result == SRT_ERROR) {
+//        SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_OHEADBW: " << srt_getlasterror_str());
+//        return false;
+//    }
 
-    result = srt_setsockflag(context, SRTO_PAYLOADSIZE, &mtu, sizeof mtu);
+    result = srt_setsockflag(context, SRTO_PAYLOADSIZE, &payloadSize, sizeof payloadSize);
     if (result == SRT_ERROR) {
         SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_PAYLOADSIZE: " << srt_getlasterror_str());
         return false;
@@ -267,7 +269,7 @@ bool SRTNet::startClient(std::string host,
                          int32_t latency,
                          int overhead,
                          std::shared_ptr<NetworkConnection> &ctx,
-                         int mtu,
+                         int payloadSize,
                          std::string psk) {
     std::lock_guard<std::mutex> lock(netMtx);
     if (currentMode != Mode::unknown) {
@@ -311,13 +313,20 @@ bool SRTNet::startClient(std::string host,
         return false;
     }
 
+    uint32_t maxBW = 0;
+    result = srt_setsockflag(context, SRTO_MAXBW, &maxBW, sizeof maxBW);
+    if (result == SRT_ERROR) {
+        SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_MAXBW: " << srt_getlasterror_str());
+        return false;
+    }
+
     result = srt_setsockflag(context, SRTO_OHEADBW, &overhead, sizeof overhead);
     if (result == SRT_ERROR) {
         SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_OHEADBW: " << srt_getlasterror_str());
         return false;
     }
 
-    result = srt_setsockflag(context, SRTO_PAYLOADSIZE, &mtu, sizeof mtu);
+    result = srt_setsockflag(context, SRTO_PAYLOADSIZE, &payloadSize, sizeof payloadSize);
     if (result == SRT_ERROR) {
         SRT_LOGGER(true, LOGG_FATAL, "srt_setsockflag SRTO_PAYLOADSIZE: " << srt_getlasterror_str());
         return false;

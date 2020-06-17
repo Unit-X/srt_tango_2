@@ -66,13 +66,11 @@ public:
      * @param ip Listen IP
      * @param port Listen Port
      * @param reorder number of packets in re-order window
-     * @param latency Max re-send window (ms) / also the delay of transmission
-     * @param overhead % extra of the BW that will be allowed for re-transmission packets
-     * @param mtu sets the MTU
+     * @param payloadSize sets the SRT payload size
      * @param psk Optional Pre Shared Key (AES-128)
      * @return true if server was able to start
     */
-    bool startServer(std::string ip, uint16_t port, int reorder, int32_t latency, int overhead, int mtu,
+    bool startServer(std::string ip, uint16_t port, int reorder, int payloadSize,
                      std::string psk = "");
 
     /**
@@ -84,12 +82,13 @@ public:
      * @param reorder number of packets in re-order window
      * @param latency Max re-send window (ms) / also the delay of transmission
      * @param overhead % extra of the BW that will be allowed for re-transmission packets
-     * @param mtu sets the MTU
+     * @param payloadSize sets the SRT payload size
      * @param psk Optional Pre Shared Key (AES-128)
      * @return true if client was able to connect to the server
+     *
     */
     bool startClient(std::string host, uint16_t port, int reorder, int32_t latency, int overhead,
-                     std::shared_ptr<NetworkConnection> &ctx, int mtu, std::string psk = "");
+                     std::shared_ptr<NetworkConnection> &ctx, int payloadSize, std::string psk = "");
 
     /**
      *
