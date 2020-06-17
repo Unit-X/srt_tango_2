@@ -148,7 +148,7 @@ json getStats(std::string cmdString) {
                                                 std::string handle = std::to_string(client.first);
                                                 auto v = std::any_cast<std::shared_ptr<MyClass> &>(client.second->object); //Get my object I gave SRTNet
                                                 SRT_TRACEBSTATS currentServerStats = {0};
-                                                if (mySRTNetServer.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::no, client.first)) {
+                                                if (mySRTNetServer.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::yes, client.first)) {
                                                     //Send all stats
                                                     j[handle.c_str()]["msTimeStamp"] = currentServerStats.msTimeStamp;
                                                     j[handle.c_str()]["pktFlowWindow"] = currentServerStats.pktFlowWindow;

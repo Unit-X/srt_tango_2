@@ -69,7 +69,7 @@ json getStats(std::string cmdString) {
 
         std::string handle = std::to_string(mySRTNetClient.context);
         SRT_TRACEBSTATS currentServerStats = {0};
-        if (mySRTNetClient.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::no)) {
+        if (mySRTNetClient.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::yes)) {
 
             //Send all stats
             j[handle.c_str()]["msTimeStamp"] = currentServerStats.msTimeStamp;
