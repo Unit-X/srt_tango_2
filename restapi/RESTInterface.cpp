@@ -6,7 +6,7 @@
 //  Copyright © 2019 Anders Cedronius. All rights reserved.
 //
 //
-//curl --header "Content-Type: application/json" --request POST --data '{"token":"R32DD1!344sk#","command":"dumpall"}' http://127.0.0.1:8080/restapi/version1
+//curl --header "Content-Type: application/json" --request POST --data '{"token":"R32DD1!344sk#","command":"dumpall","stats_id":"anders","diff":true}' http://127.0.0.1:8080/restapi/version1
 
 #include "RESTInterface.hpp"
 
@@ -65,6 +65,8 @@ std::string RESTInterface::readJSON(std::string data) {
         jsonOK = false;
     }
     auto command = getContentForKey<std::string>("command", j, jError, jsonOK);
+    auto statsID = getContentForKey<std::string>("stats_id", j, jError, jsonOK);
+    auto diff = getContentForKey<bool>("diff", j, jError, jsonOK);
     
     //Did we find data as expected or is the interface method registerd?
     if (!jsonOK || !getStatsCallback) {
@@ -75,7 +77,7 @@ std::string RESTInterface::readJSON(std::string data) {
     }
     //YES
     jResponce["responce"] = "ok";
-    jResponce["info"] = getStatsCallback(command);
+    jResponce["info"] = getStatsCallback(command, statsID, diff);
     return jResponce.dump();
 }
 

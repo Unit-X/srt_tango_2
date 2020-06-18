@@ -2,11 +2,16 @@
 #include "ElasticFrameProtocol.h"
 #include "SRTNet.h"
 #include "RESTInterface.hpp"
+#include "statshandler.h"
 
 #define PAYLOAD_SIZE 1456 //SRT-max
 
+#define TIME_OUT_STATUS_HANDLER 86400 //Keep a client for a day
+
 SRTNet mySRTNetServer; //SRT
 RESTInterface myRESTInterface;
+
+bool threadRuns = {true};
 
 void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket);
 
@@ -138,9 +143,37 @@ void gotData(ElasticFrameProtocolReceiver::pFramePtr &rPacket) {
     }
 }
 
-json getStats(std::string cmdString) {
+void statsGarbageHandler() {
+    std::vector<std::string> removeMapKeys;
+    while (threadRuns) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        statsMapMtx.lock();
+        removeMapKeys.clear();
+        for (auto &statsWorker: statsMap) {
+            if (!statsWorker.second->tick()) {
+                removeMapKeys.push_back(statsWorker.first);
+            }
+        }
+        for (auto &key: removeMapKeys) {
+            std::cout << "garbage collect stats worker id: " << key << std::endl;
+            statsMap.erase(key);
+        }
+        statsMapMtx.unlock();
+    }
+};
+
+json getStats(std::string cmdString, std::string statsID, bool diff) {
     json j;
     if (cmdString == "dumpall") {
+
+        std::lock_guard<std::mutex> lock(statsMapMtx);
+        if ( statsMap.find(statsID) == statsMap.end() ) {
+            statsMap[statsID] = std::make_unique<StatsHandler>(TIME_OUT_STATUS_HANDLER);
+        } else {
+            statsMap[statsID]->setTimeout(TIME_OUT_STATUS_HANDLER);
+        }
+
+        std::cout << "Stats asked by id: " << statsID << std::endl;
 
         mySRTNetServer.getActiveClients([&](std::map<SRTSOCKET, std::shared_ptr<NetworkConnection>> &clientList)
                                         {
@@ -150,42 +183,86 @@ json getStats(std::string cmdString) {
                                                 SRT_TRACEBSTATS currentServerStats = {0};
                                                 if (mySRTNetServer.getStatistics(&currentServerStats, SRTNetClearStats::yes, SRTNetInstant::yes, client.first)) {
                                                     //Send all stats
-                                                    j[handle.c_str()]["msTimeStamp"] = currentServerStats.msTimeStamp;
-                                                    j[handle.c_str()]["pktFlowWindow"] = currentServerStats.pktFlowWindow;
-                                                    j[handle.c_str()]["pktCongestionWindow"] = currentServerStats.pktCongestionWindow;
-                                                    j[handle.c_str()]["pktFlightSize"] = currentServerStats.pktFlightSize;
-                                                    j[handle.c_str()]["msRTT"] = currentServerStats.msRTT;
-                                                    j[handle.c_str()]["mbpsBandwidth"] = currentServerStats.mbpsBandwidth;
-                                                    j[handle.c_str()]["mbpsMaxBW"] = currentServerStats.mbpsMaxBW;
-                                                    j[handle.c_str()]["pktSent"] = currentServerStats.pktSent;
-                                                    j[handle.c_str()]["pktSndLoss"] = currentServerStats.pktSndLoss;
-                                                    j[handle.c_str()]["pktSndDrop"] = currentServerStats.pktSndDrop;
-                                                    j[handle.c_str()]["pktRetrans"] = currentServerStats.pktRetrans;
-                                                    j[handle.c_str()]["byteSent"] = currentServerStats.byteSent;
-                                                    j[handle.c_str()]["byteAvailSndBuf"] = currentServerStats.byteAvailSndBuf;
-                                                    j[handle.c_str()]["byteSndDrop"] = currentServerStats.byteSndDrop;
-                                                    j[handle.c_str()]["mbpsSendRate"] = currentServerStats.mbpsSendRate;
-                                                    j[handle.c_str()]["usPktSndPeriod"] = currentServerStats.usPktSndPeriod;
-                                                    j[handle.c_str()]["msSndBuf"] = currentServerStats.msSndBuf;
-                                                    j[handle.c_str()]["pktRecv"] = currentServerStats.pktRecv;
-                                                    j[handle.c_str()]["pktRcvLoss"] = currentServerStats.pktRcvLoss;
-                                                    j[handle.c_str()]["pktRcvDrop"] = currentServerStats.pktRcvDrop;
-                                                    j[handle.c_str()]["pktRcvRetrans"] = currentServerStats.pktRcvRetrans;
-                                                    j[handle.c_str()]["pktRcvBelated"] = currentServerStats.pktRcvBelated;
-                                                    j[handle.c_str()]["byteRecv"] = currentServerStats.byteRecv;
-                                                    j[handle.c_str()]["byteAvailRcvBuf"] = currentServerStats.byteAvailRcvBuf;
-                                                    j[handle.c_str()]["byteRcvLoss"] = currentServerStats.byteRcvLoss;
-                                                    j[handle.c_str()]["byteRcvDrop"] = currentServerStats.byteRcvDrop;
-                                                    j[handle.c_str()]["mbpsRecvRate"] = currentServerStats.mbpsRecvRate;
-                                                    j[handle.c_str()]["msRcvBuf"] = currentServerStats.msRcvBuf;
-                                                    j[handle.c_str()]["msRcvTsbPdDelay"] = currentServerStats.msRcvTsbPdDelay;
-                                                    j[handle.c_str()]["pktReorderTolerance"] = currentServerStats.pktReorderTolerance;
+                                                    if (diff) {
+                                                        statsMap[statsID]->generateStatsDiff(currentServerStats);
+                                                        j[handle.c_str()]["msTimeStamp"] = statsMap[statsID]->msTimeStampDelta;
+                                                        j[handle.c_str()]["pktFlowWindow"] = statsMap[statsID]->pktFlowWindowDelta;
+                                                        j[handle.c_str()]["pktCongestionWindow"] = statsMap[statsID]->pktCongestionWindowDelta;
+                                                        j[handle.c_str()]["pktFlightSize"] = statsMap[statsID]->pktFlightSizeDelta;
+                                                        j[handle.c_str()]["msRTT"] = statsMap[statsID]->msRTTDelta;
+                                                        j[handle.c_str()]["mbpsBandwidth"] = statsMap[statsID]->mbpsBandwidthDelta;
+                                                        j[handle.c_str()]["mbpsMaxBW"] = statsMap[statsID]->mbpsMaxBWDelta;
+                                                        j[handle.c_str()]["pktSent"] = statsMap[statsID]->pktSentDelta;
+                                                        j[handle.c_str()]["pktSndLoss"] = statsMap[statsID]->pktSndLossDelta;
+                                                        j[handle.c_str()]["pktSndDrop"] = statsMap[statsID]->pktSndDropDelta;
+                                                        j[handle.c_str()]["pktRetrans"] = statsMap[statsID]->pktRetransDelta;
+                                                        j[handle.c_str()]["byteSent"] = statsMap[statsID]->byteSentDelta;
+                                                        j[handle.c_str()]["byteAvailSndBuf"] = statsMap[statsID]->byteAvailSndBufDelta;
+                                                        j[handle.c_str()]["byteSndDrop"] = statsMap[statsID]->byteSndDropDelta;
+                                                        j[handle.c_str()]["mbpsSendRate"] = statsMap[statsID]->mbpsSendRateDelta;
+                                                        j[handle.c_str()]["usPktSndPeriod"] = statsMap[statsID]->usPktSndPeriodDelta;
+                                                        j[handle.c_str()]["msSndBuf"] = statsMap[statsID]->msSndBufDelta;
+                                                        j[handle.c_str()]["pktRecv"] = statsMap[statsID]->pktRecvDelta;
+                                                        j[handle.c_str()]["pktRcvLoss"] = statsMap[statsID]->pktRcvLossDelta;
+                                                        j[handle.c_str()]["pktRcvDrop"] = statsMap[statsID]->pktRcvDropDelta;
+                                                        j[handle.c_str()]["pktRcvRetrans"] = statsMap[statsID]->pktRcvRetransDelta;
+                                                        j[handle.c_str()]["pktRcvBelated"] = statsMap[statsID]->pktRcvBelatedDelta;
+                                                        j[handle.c_str()]["byteRecv"] = statsMap[statsID]->byteRecvDelta;
+                                                        j[handle.c_str()]["byteAvailRcvBuf"] = statsMap[statsID]->byteAvailRcvBufDelta;
+                                                        j[handle.c_str()]["byteRcvLoss"] = statsMap[statsID]->byteRcvLossDelta;
+                                                        j[handle.c_str()]["byteRcvDrop"] = statsMap[statsID]->byteRcvDropDelta;
+                                                        j[handle.c_str()]["mbpsRecvRate"] = statsMap[statsID]->mbpsRecvRateDelta;
+                                                        j[handle.c_str()]["msRcvBuf"] = statsMap[statsID]->msRcvBufDelta;
+                                                        j[handle.c_str()]["msRcvTsbPdDelay"] = statsMap[statsID]->msRcvTsbPdDelayDelta;
+                                                        j[handle.c_str()]["pktReorderTolerance"] = statsMap[statsID]->pktReorderToleranceDelta;
+                                                    } else {
+                                                        j[handle.c_str()]["msTimeStamp"] = currentServerStats.msTimeStamp;
+                                                        j[handle.c_str()]["pktFlowWindow"] = currentServerStats.pktFlowWindow;
+                                                        j[handle.c_str()]["pktCongestionWindow"] = currentServerStats.pktCongestionWindow;
+                                                        j[handle.c_str()]["pktFlightSize"] = currentServerStats.pktFlightSize;
+                                                        j[handle.c_str()]["msRTT"] = currentServerStats.msRTT;
+                                                        j[handle.c_str()]["mbpsBandwidth"] = currentServerStats.mbpsBandwidth;
+                                                        j[handle.c_str()]["mbpsMaxBW"] = currentServerStats.mbpsMaxBW;
+                                                        j[handle.c_str()]["pktSent"] = currentServerStats.pktSent;
+                                                        j[handle.c_str()]["pktSndLoss"] = currentServerStats.pktSndLoss;
+                                                        j[handle.c_str()]["pktSndDrop"] = currentServerStats.pktSndDrop;
+                                                        j[handle.c_str()]["pktRetrans"] = currentServerStats.pktRetrans;
+                                                        j[handle.c_str()]["byteSent"] = currentServerStats.byteSent;
+                                                        j[handle.c_str()]["byteAvailSndBuf"] = currentServerStats.byteAvailSndBuf;
+                                                        j[handle.c_str()]["byteSndDrop"] = currentServerStats.byteSndDrop;
+                                                        j[handle.c_str()]["mbpsSendRate"] = currentServerStats.mbpsSendRate;
+                                                        j[handle.c_str()]["usPktSndPeriod"] = currentServerStats.usPktSndPeriod;
+                                                        j[handle.c_str()]["msSndBuf"] = currentServerStats.msSndBuf;
+                                                        j[handle.c_str()]["pktRecv"] = currentServerStats.pktRecv;
+                                                        j[handle.c_str()]["pktRcvLoss"] = currentServerStats.pktRcvLoss;
+                                                        j[handle.c_str()]["pktRcvDrop"] = currentServerStats.pktRcvDrop;
+                                                        j[handle.c_str()]["pktRcvRetrans"] = currentServerStats.pktRcvRetrans;
+                                                        j[handle.c_str()]["pktRcvBelated"] = currentServerStats.pktRcvBelated;
+                                                        j[handle.c_str()]["byteRecv"] = currentServerStats.byteRecv;
+                                                        j[handle.c_str()]["byteAvailRcvBuf"] = currentServerStats.byteAvailRcvBuf;
+                                                        j[handle.c_str()]["byteRcvLoss"] = currentServerStats.byteRcvLoss;
+                                                        j[handle.c_str()]["byteRcvDrop"] = currentServerStats.byteRcvDrop;
+                                                        j[handle.c_str()]["mbpsRecvRate"] = currentServerStats.mbpsRecvRate;
+                                                        j[handle.c_str()]["msRcvBuf"] = currentServerStats.msRcvBuf;
+                                                        j[handle.c_str()]["msRcvTsbPdDelay"] = currentServerStats.msRcvTsbPdDelay;
+                                                        j[handle.c_str()]["pktReorderTolerance"] = currentServerStats.pktReorderTolerance;
+                                                    }
                                                 }
+
+                                                if (diff) {
+                                                    statsMap[statsID]->generateStatsEFPDiff(efpFrameCounter[v->efpId],efpBrokenCounter[v->efpId],byteCounter[v->efpId]);
+                                                    j[handle.c_str()]["efp_broken_cnt"] = statsMap[statsID]->efpBrokenCounterDelta;
+                                                    j[handle.c_str()]["efp_frame_cnt"] = statsMap[statsID]->efpFrameCounterDelta;
+                                                    j[handle.c_str()]["efp_byte_cnt"] = statsMap[statsID]->byteCounterDelta;
+                                                } else {
+                                                    j[handle.c_str()]["efp_broken_cnt"] = efpBrokenCounter[v->efpId];
+                                                    j[handle.c_str()]["efp_frame_cnt"] = efpFrameCounter[v->efpId];
+                                                    j[handle.c_str()]["efp_byte_cnt"] = byteCounter[v->efpId];
+                                                }
+
                                                 j[handle.c_str()]["duration_seconds_cnt"] = std::chrono::duration_cast<std::chrono::seconds>(
                                                         std::chrono::steady_clock::now().time_since_epoch()).count() - v->timestampCreated;
-                                                j[handle.c_str()]["efp_broken_cnt"] = efpBrokenCounter[v->efpId];
-                                                j[handle.c_str()]["efp_frame_cnt"] = efpFrameCounter[v->efpId];
-                                                j[handle.c_str()]["efp_byte_cnt"] = byteCounter[v->efpId];
+
                                             }
                                         }
         );
@@ -210,7 +287,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    myRESTInterface.getStatsCallback=std::bind(&getStats, std::placeholders::_1);
+    myRESTInterface.getStatsCallback=std::bind(&getStats, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
     if (!myRESTInterface.startServer(listenIP.c_str(), listenJsonPort, "/restapi/version1")) {
         std::cout << "REST interface did not start." << std::endl;
         return EXIT_FAILURE;
@@ -228,6 +305,9 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    //Start stats garbage collector
+    std::thread(std::bind(&statsGarbageHandler)).detach();
+
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         mySRTNetServer.getActiveClients([](std::map<SRTSOCKET, std::shared_ptr<NetworkConnection>> &clientList)
@@ -237,6 +317,7 @@ int main(int argc, char *argv[]) {
         );
     }
 
+    threadRuns = false;
     //When you decide to quit garbage collect and stop threads....
     mySRTNetServer.stop();
 
