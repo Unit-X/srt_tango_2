@@ -192,7 +192,6 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-
     myEFPSender.sendCallback = std::bind(&sendData, std::placeholders::_1);
 
     //Set-up SRT
@@ -202,7 +201,7 @@ int main(int argc, char *argv[]) {
                                             std::placeholders::_2,
                                             std::placeholders::_3,
                                             std::placeholders::_4);
-    if (!mySRTNetClient.startClient(targetIP, targetPort, 4, 1000, 100, client1Connection, PAYLOAD_SIZE,
+    if (!mySRTNetClient.startClient(targetIP, targetPort, 4, 1500, 100, client1Connection, PAYLOAD_SIZE,
                                     "Th1$_is_4_0pt10N4L_P$k")) {
         std::cout << "SRT client1 failed starting." << std::endl;
         return EXIT_FAILURE;
